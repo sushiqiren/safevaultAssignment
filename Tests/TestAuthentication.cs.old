@@ -1,0 +1,413 @@
+using NUnit.Framework;
+using SafeVault.Services;
+using Microsoft.EntityFrameworkCore;
+
+namespace SafeVault.Tests
+{
+    /// <summary>
+    /// Test suite for authentication functionality including password hashing,
+    /// verification, and user authentication.
+    /// </summary>
+    [TestFixture]
+    public class TestAuthentication
+    {
+        private AuthenticationService _authService = null!;
+        private SafeVault.Models.SafeVaultDbContext _context = null!;
+        private Microsoft.Extensions.Logging.ILogger<AuthenticationService> _logger = null!;
+
+        [SetUp]
+        public void Setup()
+        {
+            // Create in-memory database for testing
+            var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<SafeVault.Models.SafeVaultDbContext>()
+                .UseInMemoryDatabase(databaseName: "TestAuthDb_" + Guid.NewGuid())
+                .Options;
+
+            _context = new SafeVault.Models.SafeVaultDbContext(options);
+
+            // Create a logger
+            var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
+            {
+                builder.AddConsole();
+            });
+            _logger = loggerFactory.CreateLogger<AuthenticationService>();
+
+            _authService = new AuthenticationService(_context, _logger);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            _context?.Dispose();
+        }
+
+        #region Password Hashing Tests
+
+        [Test]
+        public void TestHashPassword_GeneratesValidHash()
+        {
+            // Arrange
+            string password = "SecurePassword123!";
+
+            // Act
+            string hash = _authService.HashPassword(password);
+
+            // Assert
+            Assert.That(hash, Is.Not.Null.And.Not.Empty, "Hash should not be null or empty");
+            Assert.That(hash.Length, Is.GreaterThan(50), "BCrypt hash should be at least 50 characters");
+            Assert.That(hash.StartsWith("$2"), Is.True, "BCrypt hash should start with $2");
+        }
+
+        [Test]
+        public void TestHashPassword_GeneratesDifferentHashesForSamePassword()
+        {
+            // Arrange
+            string password = "SecurePassword123!";
+
+            // Act
+            string hash1 = _authService.HashPassword(password);
+            string hash2 = _authService.HashPassword(password);
+
+            // Assert
+            Assert.That(hash1, Is.Not.EqualTo(hash2), 
+                "BCrypt should generate different hashes due to random salt");
+        }
+
+        [Test]
+        public void TestHashPassword_ThrowsExceptionForEmptyPassword()
+        {
+            // Arrange
+            string emptyPassword = "";
+
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => _authService.HashPassword(emptyPassword),
+                "Should throw exception for empty password");
+        }
+
+        #endregion
+
+        #region Password Verification Tests
+
+        [Test]
+        public void TestVerifyPassword_SucceedsWithCorrectPassword()
+        {
+            // Arrange
+            string password = "SecurePassword123!";
+            string hash = _authService.HashPassword(password);
+
+            // Act
+            bool isValid = _authService.VerifyPassword(password, hash);
+
+            // Assert
+            Assert.That(isValid, Is.True, "Password verification should succeed with correct password");
+        }
+
+        [Test]
+        public void TestVerifyPassword_FailsWithIncorrectPassword()
+        {
+            // Arrange
+            string correctPassword = "SecurePassword123!";
+            string wrongPassword = "WrongPassword456!";
+            string hash = _authService.HashPassword(correctPassword);
+
+            // Act
+            bool isValid = _authService.VerifyPassword(wrongPassword, hash);
+
+            // Assert
+            Assert.That(isValid, Is.False, "Password verification should fail with incorrect password");
+        }
+
+        [Test]
+        public void TestVerifyPassword_IsCaseSensitive()
+        {
+            // Arrange
+            string password = "SecurePassword123!";
+            string differentCase = "securepassword123!";
+            string hash = _authService.HashPassword(password);
+
+            // Act
+            bool isValid = _authService.VerifyPassword(differentCase, hash);
+
+            // Assert
+            Assert.That(isValid, Is.False, "Password verification should be case-sensitive");
+        }
+
+        [Test]
+        public void TestVerifyPassword_HandlesEmptyOrNullInputs()
+        {
+            // Arrange
+            string password = "SecurePassword123!";
+            string hash = _authService.HashPassword(password);
+
+            // Act & Assert
+            Assert.That(_authService.VerifyPassword("", hash), Is.False, 
+                "Should return false for empty password");
+            Assert.That(_authService.VerifyPassword(password, ""), Is.False, 
+                "Should return false for empty hash");
+            Assert.That(_authService.VerifyPassword(null!, hash), Is.False, 
+                "Should return false for null password");
+        }
+
+        #endregion
+
+        #region Password Strength Validation Tests
+
+        [Test]
+        public void TestValidatePasswordStrength_AcceptsStrongPassword()
+        {
+            // Arrange
+            string strongPassword = "SecurePass123!";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(strongPassword);
+
+            // Assert
+            Assert.That(result.IsValid, Is.True, "Strong password should be accepted");
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsTooShortPassword()
+        {
+            // Arrange
+            string shortPassword = "Short1!";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(shortPassword);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Password shorter than 8 characters should be rejected");
+            Assert.That(result.ErrorMessage, Does.Contain("8 characters"));
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsPasswordWithoutUppercase()
+        {
+            // Arrange
+            string noUppercase = "password123!";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(noUppercase);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Password without uppercase should be rejected");
+            Assert.That(result.ErrorMessage, Does.Contain("uppercase"));
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsPasswordWithoutLowercase()
+        {
+            // Arrange
+            string noLowercase = "PASSWORD123!";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(noLowercase);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Password without lowercase should be rejected");
+            Assert.That(result.ErrorMessage, Does.Contain("lowercase"));
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsPasswordWithoutDigit()
+        {
+            // Arrange
+            string noDigit = "SecurePassword!";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(noDigit);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Password without digit should be rejected");
+            Assert.That(result.ErrorMessage, Does.Contain("digit"));
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsPasswordWithoutSpecialChar()
+        {
+            // Arrange
+            string noSpecialChar = "SecurePassword123";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(noSpecialChar);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Password without special character should be rejected");
+            Assert.That(result.ErrorMessage, Does.Contain("special character"));
+        }
+
+        [Test]
+        public void TestValidatePasswordStrength_RejectsEmptyPassword()
+        {
+            // Arrange
+            string emptyPassword = "";
+
+            // Act
+            var result = _authService.ValidatePasswordStrength(emptyPassword);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Empty password should be rejected");
+        }
+
+        #endregion
+
+        #region User Authentication Tests
+
+        [Test]
+        public async Task TestAuthenticate_SucceedsWithValidCredentials()
+        {
+            // Arrange
+            string username = "testuser";
+            string password = "SecurePass123!";
+            var user = new SafeVault.Models.User
+            {
+                Username = username,
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword(password),
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Act
+            var result = await _authService.AuthenticateAsync(username, password);
+
+            // Assert
+            Assert.That(result.IsSuccessful, Is.True, "Authentication should succeed");
+            Assert.That(result.User, Is.Not.Null, "User should be returned");
+            Assert.That(result.User!.Username, Is.EqualTo(username));
+        }
+
+        [Test]
+        public async Task TestAuthenticate_FailsWithInvalidPassword()
+        {
+            // Arrange
+            string username = "testuser";
+            string correctPassword = "SecurePass123!";
+            string wrongPassword = "WrongPass123!";
+            var user = new SafeVault.Models.User
+            {
+                Username = username,
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword(correctPassword),
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Act
+            var result = await _authService.AuthenticateAsync(username, wrongPassword);
+
+            // Assert
+            Assert.That(result.IsSuccessful, Is.False, "Authentication should fail");
+            Assert.That(result.ErrorMessage, Is.Not.Empty);
+        }
+
+        [Test]
+        public async Task TestAuthenticate_FailsWithNonexistentUser()
+        {
+            // Arrange
+            string username = "nonexistent";
+            string password = "SecurePass123!";
+
+            // Act
+            var result = await _authService.AuthenticateAsync(username, password);
+
+            // Assert
+            Assert.That(result.IsSuccessful, Is.False, "Authentication should fail for nonexistent user");
+            Assert.That(result.ErrorMessage, Does.Contain("Invalid username or password"));
+        }
+
+        [Test]
+        public async Task TestAuthenticate_IncrementsFailedAttempts()
+        {
+            // Arrange
+            string username = "testuser";
+            string correctPassword = "SecurePass123!";
+            string wrongPassword = "WrongPass123!";
+            var user = new SafeVault.Models.User
+            {
+                Username = username,
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword(correctPassword),
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Act
+            await _authService.AuthenticateAsync(username, wrongPassword);
+            await _authService.AuthenticateAsync(username, wrongPassword);
+
+            // Reload user
+            var updatedUser = await _context.Users
+                .FirstAsync(u => u.Username == username);
+
+            // Assert
+            Assert.That(updatedUser.FailedLoginAttempts, Is.EqualTo(2), 
+                "Failed attempts should be incremented");
+        }
+
+        [Test]
+        public async Task TestAuthenticate_LocksAccountAfterMaxFailedAttempts()
+        {
+            // Arrange
+            string username = "testuser";
+            string correctPassword = "SecurePass123!";
+            string wrongPassword = "WrongPass123!";
+            var user = new SafeVault.Models.User
+            {
+                Username = username,
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword(correctPassword),
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Act - Attempt 5 failed logins
+            for (int i = 0; i < 5; i++)
+            {
+                await _authService.AuthenticateAsync(username, wrongPassword);
+            }
+
+            // Reload user
+            var updatedUser = await _context.Users
+                .FirstAsync(u => u.Username == username);
+
+            // Assert
+            Assert.That(updatedUser.IsLockedOut, Is.True, "Account should be locked");
+            Assert.That(updatedUser.LockoutEnd, Is.Not.Null);
+        }
+
+        [Test]
+        public async Task TestAuthenticate_ResetsFailedAttemptsOnSuccess()
+        {
+            // Arrange
+            string username = "testuser";
+            string correctPassword = "SecurePass123!";
+            var user = new SafeVault.Models.User
+            {
+                Username = username,
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword(correctPassword),
+                FailedLoginAttempts = 3,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Act
+            await _authService.AuthenticateAsync(username, correctPassword);
+
+            // Reload user
+            var updatedUser = await _context.Users
+                .FirstAsync(u => u.Username == username);
+
+            // Assert
+            Assert.That(updatedUser.FailedLoginAttempts, Is.EqualTo(0), 
+                "Failed attempts should be reset on successful login");
+        }
+
+        #endregion
+    }
+}

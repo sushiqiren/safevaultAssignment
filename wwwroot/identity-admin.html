@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - SafeVault (Identity)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { color: #667eea; }
+        .user-info { display: flex; align-items: center; gap: 15px; }
+        .user-badge {
+            background: #667eea;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+        .logout-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .logout-btn:hover { background: #c82333; }
+        .dashboard-container { max-width: 1400px; margin: 0 auto; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .stat-card .number { font-size: 36px; font-weight: bold; color: #667eea; }
+        .content-section {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .users-table { width: 100%; border-collapse: collapse; }
+        .users-table th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #dee2e6;
+        }
+        .users-table td { padding: 12px; border-bottom: 1px solid #dee2e6; }
+        .users-table tr:hover { background: #f8f9fa; }
+        .role-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .role-admin { background: #dc3545; color: white; }
+        .role-moderator { background: #ffc107; color: #333; }
+        .role-user { background: #28a745; color: white; }
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-active { background: #d4edda; color: #155724; }
+        .status-locked { background: #f8d7da; color: #721c24; }
+        .action-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 5px;
+        }
+        .action-btn.danger { background: #dc3545; }
+        .action-btn.warning { background: #ffc107; color: #333; }
+        .action-btn.success { background: #28a745; }
+        .message {
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="header">
+            <h1>🛡️ Admin Dashboard</h1>
+            <div class="user-info">
+                <span class="user-badge" id="adminEmail">Loading...</span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Users</h3>
+                <div class="number" id="totalUsers">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Admins</h3>
+                <div class="number" id="adminCount">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Moderators</h3>
+                <div class="number" id="moderatorCount">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Regular Users</h3>
+                <div class="number" id="userCount">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Locked Accounts</h3>
+                <div class="number" id="lockedCount">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Recent Logins</h3>
+                <div class="number" id="recentLogins">-</div>
+            </div>
+        </div>
+
+        <div class="content-section">
+            <div class="section-header">
+                <h2>User Management</h2>
+                <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="users-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Full Name</th>
+                            <th>Roles</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Last Login</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTableBody">
+                        <tr><td colspan="7" style="text-align: center;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const apiBaseUrl = window.location.origin;
+        const accessToken = localStorage.getItem('accessToken');
+        const userEmail = localStorage.getItem('userEmail');
+
+        // Check authentication
+        if (!accessToken) {
+            window.location.href = '/identity-login.html';
+        }
+
+        // Display admin email
+        document.getElementById('adminEmail').textContent = userEmail || 'Admin';
+
+        function showMessage(text, type) {
+            const msgDiv = document.getElementById('message');
+            msgDiv.textContent = text;
+            msgDiv.className = `message ${type}`;
+            msgDiv.style.display = 'block';
+            setTimeout(() => { msgDiv.style.display = 'none'; }, 5000);
+        }
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const options = {
+                method,
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            };
+            if (body) options.body = JSON.stringify(body);
+
+            const response = await fetch(`${apiBaseUrl}${endpoint}`, options);
+            
+            if (response.status === 401) {
+                localStorage.clear();
+                window.location.href = '/identity-login.html';
+                return null;
+            }
+            
+            return response;
+        }
+
+        async function loadStatistics() {
+            try {
+                const response = await apiCall('/api/IdentityAdmin/statistics');
+                if (!response.ok) return;
+                
+                const data = await response.json();
+                document.getElementById('totalUsers').textContent = data.totalUsers;
+                document.getElementById('adminCount').textContent = data.usersByRole.admins;
+                document.getElementById('moderatorCount').textContent = data.usersByRole.moderators;
+                document.getElementById('userCount').textContent = data.usersByRole.users;
+                document.getElementById('lockedCount').textContent = data.lockedAccounts;
+                document.getElementById('recentLogins').textContent = data.recentLogins;
+            } catch (error) {
+                console.error('Error loading statistics:', error);
+            }
+        }
+
+        // HTML escape function to prevent XSS
+        function escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return unsafe
+                .toString()
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        async function loadUsers() {
+            try {
+                const response = await apiCall('/api/IdentityAdmin/users');
+                if (!response.ok) throw new Error('Failed to load users');
+                
+                const data = await response.json();
+                const tbody = document.getElementById('usersTableBody');
+                
+                if (data.users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No users found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.users.map(user => `
+                    <tr>
+                        <td>${escapeHtml(user.email)}</td>
+                        <td>${escapeHtml(user.fullName) || '-'}</td>
+                        <td>${user.roles.map(r => `<span class="role-badge role-${escapeHtml(r.toLowerCase())}">${escapeHtml(r)}</span>`).join(' ')}</td>
+                        <td>
+                            ${user.isLockedOut 
+                                ? '<span class="status-badge status-locked">Locked</span>' 
+                                : '<span class="status-badge status-active">Active</span>'}
+                        </td>
+                        <td>${escapeHtml(new Date(user.createdAt).toLocaleDateString())}</td>
+                        <td>${user.lastLoginAt ? escapeHtml(new Date(user.lastLoginAt).toLocaleDateString()) : 'Never'}</td>
+                        <td>
+                            ${user.isLockedOut 
+                                ? `<button class="action-btn success" onclick="unlockUser('${escapeHtml(user.id)}')">Unlock</button>`
+                                : `<button class="action-btn warning" onclick="lockUser('${escapeHtml(user.id)}')">Lock</button>`}
+                            <button class="action-btn" onclick="changeRole('${escapeHtml(user.id)}', '${escapeHtml(user.roles[0] || 'User')}')">Change Role</button>
+                            <button class="action-btn danger" onclick="deleteUser('${escapeHtml(user.id)}', '${escapeHtml(user.email)}')">Delete</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading users:', error);
+                showMessage('Failed to load users', 'error');
+            }
+        }
+
+        async function lockUser(userId) {
+            if (!confirm('Lock this user account?')) return;
+            
+            try {
+                const response = await apiCall(`/api/IdentityAdmin/users/${userId}/lock`, 'POST');
+                if (response.ok) {
+                    showMessage('User locked successfully', 'success');
+                    loadDashboard();
+                } else {
+                    showMessage('Failed to lock user', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error locking user', 'error');
+            }
+        }
+
+        async function unlockUser(userId) {
+            try {
+                const response = await apiCall(`/api/IdentityAdmin/users/${userId}/unlock`, 'POST');
+                if (response.ok) {
+                    showMessage('User unlocked successfully', 'success');
+                    loadDashboard();
+                } else {
+                    showMessage('Failed to unlock user', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error unlocking user', 'error');
+            }
+        }
+
+        async function changeRole(userId, currentRole) {
+            const newRole = prompt(`Enter new role (Admin, Moderator, User):`, currentRole);
+            if (!newRole || !['Admin', 'Moderator', 'User'].includes(newRole)) return;
+            
+            try {
+                const response = await apiCall(`/api/IdentityAdmin/users/${userId}/role`, 'PUT', { role: newRole });
+                if (response.ok) {
+                    showMessage('Role changed successfully', 'success');
+                    loadDashboard();
+                } else {
+                    showMessage('Failed to change role', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error changing role', 'error');
+            }
+        }
+
+        async function deleteUser(userId, email) {
+            if (!confirm(`Delete user ${email}? This action cannot be undone.`)) return;
+            
+            try {
+                const response = await apiCall(`/api/IdentityAdmin/users/${userId}`, 'DELETE');
+                if (response.ok) {
+                    showMessage('User deleted successfully', 'success');
+                    loadDashboard();
+                } else {
+                    const data = await response.json();
+                    showMessage(data.message || 'Failed to delete user', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error deleting user', 'error');
+            }
+        }
+
+        async function logout() {
+            const refreshToken = localStorage.getItem('refreshToken');
+            try {
+                await apiCall('/api/IdentityAuth/logout', 'POST', refreshToken);
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+            localStorage.clear();
+            window.location.href = '/identity-login.html';
+        }
+
+        function loadDashboard() {
+            loadStatistics();
+            loadUsers();
+        }
+
+        // Initial load
+        loadDashboard();
+    </script>
+</body>
+</html>

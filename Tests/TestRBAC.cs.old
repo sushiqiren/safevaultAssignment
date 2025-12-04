@@ -1,0 +1,400 @@
+using NUnit.Framework;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using SafeVault.Models;
+using SafeVault.Services;
+using SafeVault.Controllers;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
+
+namespace SafeVault.Tests
+{
+    /// <summary>
+    /// Test suite for Role-Based Access Control (RBAC) functionality.
+    /// </summary>
+    [TestFixture]
+    public class TestRBAC
+    {
+        private SafeVaultDbContext _context = null!;
+        private AuthenticationService _authService = null!;
+        private AdminController _adminController = null!;
+        private ILogger<AuthenticationService> _authLogger = null!;
+        private ILogger<AdminController> _adminLogger = null!;
+
+        [SetUp]
+        public void Setup()
+        {
+            var options = new DbContextOptionsBuilder<SafeVaultDbContext>()
+                .UseInMemoryDatabase(databaseName: "TestRBACDb_" + Guid.NewGuid())
+                .Options;
+
+            _context = new SafeVaultDbContext(options);
+
+            var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            _authLogger = loggerFactory.CreateLogger<AuthenticationService>();
+            _adminLogger = loggerFactory.CreateLogger<AdminController>();
+
+            _authService = new AuthenticationService(_context, _authLogger);
+            _adminController = new AdminController(_context, _adminLogger, _authService);
+
+            // Setup HttpContext for admin controller
+            _adminController.ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            };
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            _context?.Dispose();
+        }
+
+        #region User Role Tests
+
+        [Test]
+        public async Task TestUserCreation_DefaultsToUserRole()
+        {
+            // Arrange & Act
+            var user = new User
+            {
+                Username = "testuser",
+                Email = "test@example.com",
+                PasswordHash = _authService.HashPassword("SecurePass123!")
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            // Assert
+            Assert.That(user.Role, Is.EqualTo(UserRole.User), 
+                "New users should default to User role");
+        }
+
+        [Test]
+        public async Task TestUserCreation_CanSetAdminRole()
+        {
+            // Arrange & Act
+            var admin = new User
+            {
+                Username = "admin",
+                Email = "admin@example.com",
+                PasswordHash = _authService.HashPassword("SecurePass123!"),
+                Role = UserRole.Admin
+            };
+            _context.Users.Add(admin);
+            await _context.SaveChangesAsync();
+
+            // Assert
+            Assert.That(admin.Role, Is.EqualTo(UserRole.Admin), 
+                "User should be created with Admin role");
+        }
+
+        [Test]
+        public async Task TestUserCreation_CanSetModeratorRole()
+        {
+            // Arrange & Act
+            var moderator = new User
+            {
+                Username = "moderator",
+                Email = "mod@example.com",
+                PasswordHash = _authService.HashPassword("SecurePass123!"),
+                Role = UserRole.Moderator
+            };
+            _context.Users.Add(moderator);
+            await _context.SaveChangesAsync();
+
+            // Assert
+            Assert.That(moderator.Role, Is.EqualTo(UserRole.Moderator), 
+                "User should be created with Moderator role");
+        }
+
+        #endregion
+
+        #region Admin Statistics Tests
+
+        [Test]
+        public async Task TestAdminStatistics_ReturnsCorrectCounts()
+        {
+            // Arrange
+            await CreateTestUsers();
+            SetupAdminContext(1);
+
+            // Act
+            var result = await _adminController.GetStatistics();
+            var okResult = result as OkObjectResult;
+
+            // Assert
+            Assert.That(okResult, Is.Not.Null);
+            Assert.That(okResult!.StatusCode, Is.EqualTo(200));
+        }
+
+        [Test]
+        public async Task TestAdminGetAllUsers_ReturnsUserList()
+        {
+            // Arrange
+            await CreateTestUsers();
+            SetupAdminContext(1);
+
+            // Act
+            var result = await _adminController.GetAllUsers();
+            var okResult = result as OkObjectResult;
+
+            // Assert
+            Assert.That(okResult, Is.Not.Null);
+            Assert.That(okResult!.StatusCode, Is.EqualTo(200));
+        }
+
+        #endregion
+
+        #region Role Update Tests
+
+        [Test]
+        public async Task TestUpdateUserRole_ChangesRoleSuccessfully()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var user = await CreateUser("testuser", UserRole.User);
+            SetupAdminContext(admin.UserID);
+
+            var updateDto = new UpdateRoleDto { Role = UserRole.Moderator };
+
+            // Act
+            var result = await _adminController.UpdateUserRole(user.UserID, updateDto);
+
+            // Assert
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+            Assert.That(okResult!.StatusCode, Is.EqualTo(200));
+
+            // Verify role was updated
+            var updatedUser = await _context.Users.FindAsync(user.UserID);
+            Assert.That(updatedUser!.Role, Is.EqualTo(UserRole.Moderator));
+        }
+
+        [Test]
+        public async Task TestUpdateUserRole_CannotChangeOwnRole()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            SetupAdminContext(admin.UserID);
+
+            var updateDto = new UpdateRoleDto { Role = UserRole.User };
+
+            // Act
+            var result = await _adminController.UpdateUserRole(admin.UserID, updateDto);
+
+            // Assert
+            var badResult = result as BadRequestObjectResult;
+            Assert.That(badResult, Is.Not.Null);
+            Assert.That(badResult!.StatusCode, Is.EqualTo(400));
+        }
+
+        [Test]
+        public async Task TestUpdateUserRole_ReturnsNotFoundForNonexistentUser()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            SetupAdminContext(admin.UserID);
+
+            var updateDto = new UpdateRoleDto { Role = UserRole.Moderator };
+
+            // Act
+            var result = await _adminController.UpdateUserRole(9999, updateDto);
+
+            // Assert
+            var notFoundResult = result as NotFoundObjectResult;
+            Assert.That(notFoundResult, Is.Not.Null);
+        }
+
+        #endregion
+
+        #region Account Unlock Tests
+
+        [Test]
+        public async Task TestUnlockAccount_UnlocksLockedUser()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var lockedUser = await CreateUser("locked", UserRole.User);
+            lockedUser.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+            lockedUser.FailedLoginAttempts = 5;
+            await _context.SaveChangesAsync();
+
+            SetupAdminContext(admin.UserID);
+
+            // Act
+            var result = await _adminController.UnlockAccount(lockedUser.UserID);
+
+            // Assert
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+
+            var unlockedUser = await _context.Users.FindAsync(lockedUser.UserID);
+            Assert.That(unlockedUser!.IsLockedOut, Is.False);
+            Assert.That(unlockedUser.FailedLoginAttempts, Is.EqualTo(0));
+        }
+
+        [Test]
+        public async Task TestUnlockAccount_FailsForUnlockedAccount()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var user = await CreateUser("testuser", UserRole.User);
+            SetupAdminContext(admin.UserID);
+
+            // Act
+            var result = await _adminController.UnlockAccount(user.UserID);
+
+            // Assert
+            var badResult = result as BadRequestObjectResult;
+            Assert.That(badResult, Is.Not.Null);
+        }
+
+        #endregion
+
+        #region Delete User Tests
+
+        [Test]
+        public async Task TestDeleteUser_RemovesUserSuccessfully()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var user = await CreateUser("testuser", UserRole.User);
+            SetupAdminContext(admin.UserID);
+
+            // Act
+            var result = await _adminController.DeleteUser(user.UserID);
+
+            // Assert
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+
+            var deletedUser = await _context.Users.FindAsync(user.UserID);
+            Assert.That(deletedUser, Is.Null);
+        }
+
+        [Test]
+        public async Task TestDeleteUser_CannotDeleteOwnAccount()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            SetupAdminContext(admin.UserID);
+
+            // Act
+            var result = await _adminController.DeleteUser(admin.UserID);
+
+            // Assert
+            var badResult = result as BadRequestObjectResult;
+            Assert.That(badResult, Is.Not.Null);
+        }
+
+        #endregion
+
+        #region Password Reset Tests
+
+        [Test]
+        public async Task TestResetUserPassword_ChangesPasswordSuccessfully()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var user = await CreateUser("testuser", UserRole.User);
+            SetupAdminContext(admin.UserID);
+
+            string oldHash = user.PasswordHash;
+            string newPassword = "NewSecure123!";
+
+            // Act
+            var result = await _adminController.ResetUserPassword(user.UserID, newPassword);
+
+            // Assert
+            var okResult = result as OkObjectResult;
+            Assert.That(okResult, Is.Not.Null);
+
+            var updatedUser = await _context.Users.FindAsync(user.UserID);
+            Assert.That(updatedUser!.PasswordHash, Is.Not.EqualTo(oldHash));
+            Assert.That(_authService.VerifyPassword(newPassword, updatedUser.PasswordHash), Is.True);
+        }
+
+        [Test]
+        public async Task TestResetUserPassword_ValidatesPasswordStrength()
+        {
+            // Arrange
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var user = await CreateUser("testuser", UserRole.User);
+            SetupAdminContext(admin.UserID);
+
+            string weakPassword = "weak";
+
+            // Act
+            var result = await _adminController.ResetUserPassword(user.UserID, weakPassword);
+
+            // Assert
+            var badResult = result as BadRequestObjectResult;
+            Assert.That(badResult, Is.Not.Null);
+        }
+
+        #endregion
+
+        #region Role Authorization Tests
+
+        [Test]
+        public void TestUserRole_EnumValues()
+        {
+            // Assert
+            Assert.That((int)UserRole.User, Is.EqualTo(0));
+            Assert.That((int)UserRole.Admin, Is.EqualTo(1));
+            Assert.That((int)UserRole.Moderator, Is.EqualTo(2));
+        }
+
+        [Test]
+        public async Task TestMultipleRoles_CanCoexist()
+        {
+            // Arrange & Act
+            var admin = await CreateUser("admin", UserRole.Admin);
+            var moderator = await CreateUser("moderator", UserRole.Moderator);
+            var user = await CreateUser("user", UserRole.User);
+
+            // Assert
+            Assert.That(admin.Role, Is.EqualTo(UserRole.Admin));
+            Assert.That(moderator.Role, Is.EqualTo(UserRole.Moderator));
+            Assert.That(user.Role, Is.EqualTo(UserRole.User));
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        private async Task<User> CreateUser(string username, UserRole role)
+        {
+            var user = new User
+            {
+                Username = username,
+                Email = $"{username}@example.com",
+                PasswordHash = _authService.HashPassword("SecurePass123!"),
+                Role = role,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+            return user;
+        }
+
+        private async Task CreateTestUsers()
+        {
+            await CreateUser("admin1", UserRole.Admin);
+            await CreateUser("admin2", UserRole.Admin);
+            await CreateUser("mod1", UserRole.Moderator);
+            await CreateUser("user1", UserRole.User);
+            await CreateUser("user2", UserRole.User);
+            await CreateUser("user3", UserRole.User);
+        }
+
+        private void SetupAdminContext(int adminId)
+        {
+            _adminController.ControllerContext.HttpContext.Items["UserId"] = adminId;
+            _adminController.ControllerContext.HttpContext.Items["UserRole"] = UserRole.Admin;
+        }
+
+        #endregion
+    }
+}

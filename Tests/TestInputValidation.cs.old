@@ -1,0 +1,451 @@
+using NUnit.Framework;
+using SafeVault.Services;
+
+namespace SafeVault.Tests
+{
+    /// <summary>
+    /// Test suite for input validation functionality.
+    /// Tests for SQL Injection, XSS, and other security vulnerabilities.
+    /// </summary>
+    [TestFixture]
+    public class TestInputValidation
+    {
+        private InputValidationService _validationService = null!;
+
+        [SetUp]
+        public void Setup()
+        {
+            _validationService = new InputValidationService();
+        }
+
+        #region SQL Injection Tests
+
+        [Test]
+        public void TestForSQLInjection_BasicInjectionPattern()
+        {
+            // Arrange: Common SQL injection patterns
+            string[] sqlInjectionAttempts = new[]
+            {
+                "admin' OR '1'='1",
+                "admin' OR '1'='1' --",
+                "admin'; DROP TABLE Users--",
+                "1' UNION SELECT * FROM Users--",
+                "admin'--",
+                "' OR 1=1--",
+                "admin' AND 1=1--"
+            };
+
+            // Act & Assert: All should be rejected
+            foreach (var injection in sqlInjectionAttempts)
+            {
+                var result = _validationService.ValidateUsername(injection);
+                Assert.That(result.IsValid, Is.False, 
+                    $"SQL Injection pattern should be rejected: {injection}");
+                Assert.That(string.IsNullOrEmpty(result.ErrorMessage), Is.False,
+                    $"Error message should be provided for: {injection}");
+            }
+        }
+
+        [Test]
+        public void TestForSQLInjection_UnionBasedAttack()
+        {
+            // Arrange
+            string unionAttack = "' UNION SELECT username, password FROM users WHERE '1'='1";
+
+            // Act
+            var result = _validationService.ValidateUsername(unionAttack);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "UNION-based SQL injection should be rejected");
+        }
+
+        [Test]
+        public void TestForSQLInjection_CommentBasedAttack()
+        {
+            // Arrange
+            string[] commentAttacks = new[]
+            {
+                "admin'--",
+                "admin' /*",
+                "admin' #"
+            };
+
+            // Act & Assert
+            foreach (var attack in commentAttacks)
+            {
+                var result = _validationService.ValidateUsername(attack);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Comment-based SQL injection should be rejected: {attack}");
+            }
+        }
+
+        [Test]
+        public void TestForSQLInjection_TimeBasedBlindAttack()
+        {
+            // Arrange
+            string timeBasedAttack = "admin'; WAITFOR DELAY '00:00:05'--";
+
+            // Act
+            var result = _validationService.ValidateUsername(timeBasedAttack);
+
+            // Assert
+            Assert.That(result.IsValid, Is.False, "Time-based blind SQL injection should be rejected");
+        }
+
+        [Test]
+        public void TestForSQLInjection_EmailField()
+        {
+            // Arrange
+            string[] emailInjections = new[]
+            {
+                "admin@test.com' OR '1'='1",
+                "test@test.com'; DROP TABLE Users--",
+                "user@example.com' UNION SELECT * FROM Users--"
+            };
+
+            // Act & Assert
+            foreach (var injection in emailInjections)
+            {
+                var result = _validationService.ValidateEmail(injection);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Email SQL injection should be rejected: {injection}");
+            }
+        }
+
+        [Test]
+        public void TestForSQLInjection_DetectsMaliciousPatterns()
+        {
+            // Arrange
+            string[] maliciousInputs = new[]
+            {
+                "test; DROP TABLE Users",
+                "test OR 1=1",
+                "test AND 1=1",
+                "test UNION SELECT",
+                "test' OR '1'='1"
+            };
+
+            // Act & Assert
+            foreach (var input in maliciousInputs)
+            {
+                bool isMalicious = _validationService.ContainsMaliciousPatterns(input);
+                Assert.That(isMalicious, Is.True, 
+                    $"Should detect malicious pattern in: {input}");
+            }
+        }
+
+        #endregion
+
+        #region XSS (Cross-Site Scripting) Tests
+
+        [Test]
+        public void TestForXSS_ScriptTags()
+        {
+            // Arrange: Common XSS attack patterns
+            string[] xssAttempts = new[]
+            {
+                "<script>alert('XSS')</script>",
+                "<script>document.cookie</script>",
+                "<SCRIPT>alert('XSS')</SCRIPT>",
+                "<script src='http://evil.com/xss.js'></script>",
+                "<img src=x onerror=alert('XSS')>",
+                "<body onload=alert('XSS')>"
+            };
+
+            // Act & Assert: All should be rejected
+            foreach (var xss in xssAttempts)
+            {
+                var result = _validationService.ValidateUsername(xss);
+                Assert.That(result.IsValid, Is.False, 
+                    $"XSS pattern should be rejected: {xss}");
+            }
+        }
+
+        [Test]
+        public void TestForXSS_EventHandlers()
+        {
+            // Arrange
+            string[] eventHandlerAttacks = new[]
+            {
+                "test onclick=alert('XSS')",
+                "test onmouseover=alert('XSS')",
+                "test onerror=alert('XSS')",
+                "test onload=alert('XSS')"
+            };
+
+            // Act & Assert
+            foreach (var attack in eventHandlerAttacks)
+            {
+                var result = _validationService.ValidateUsername(attack);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Event handler XSS should be rejected: {attack}");
+            }
+        }
+
+        [Test]
+        public void TestForXSS_JavaScriptProtocol()
+        {
+            // Arrange
+            string[] jsProtocolAttacks = new[]
+            {
+                "javascript:alert('XSS')",
+                "JavaScript:alert('XSS')",
+                "test javascript:void(0)"
+            };
+
+            // Act & Assert
+            foreach (var attack in jsProtocolAttacks)
+            {
+                var result = _validationService.ValidateUsername(attack);
+                Assert.That(result.IsValid, Is.False, 
+                    $"JavaScript protocol XSS should be rejected: {attack}");
+            }
+        }
+
+        [Test]
+        public void TestForXSS_HtmlEncodingWorks()
+        {
+            // Arrange
+            string inputWithHtml = "<div>test</div>";
+
+            // Act
+            var sanitized = _validationService.SanitizeInput(inputWithHtml);
+
+            // Assert
+            Assert.That(sanitized.Contains("<div>"), Is.False, 
+                "HTML tags should be encoded");
+            Assert.That(sanitized.Contains("&lt;") && sanitized.Contains("&gt;"), Is.True, 
+                "HTML should be properly encoded");
+        }
+
+        [Test]
+        public void TestForXSS_EmailField()
+        {
+            // Arrange
+            string[] emailXssAttempts = new[]
+            {
+                "<script>alert('XSS')</script>@test.com",
+                "test@<script>alert('XSS')</script>.com",
+                "test@test.com<script>alert('XSS')</script>"
+            };
+
+            // Act & Assert
+            foreach (var xss in emailXssAttempts)
+            {
+                var result = _validationService.ValidateEmail(xss);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Email XSS pattern should be rejected: {xss}");
+            }
+        }
+
+        #endregion
+
+        #region Valid Input Tests
+
+        [Test]
+        public void TestValidUsername_AcceptsLegitimateInput()
+        {
+            // Arrange
+            string[] validUsernames = new[]
+            {
+                "john_doe",
+                "user123",
+                "test_user_2024",
+                "Admin",
+                "user"
+            };
+
+            // Act & Assert
+            foreach (var username in validUsernames)
+            {
+                var result = _validationService.ValidateUsername(username);
+                Assert.That(result.IsValid, Is.True, 
+                    $"Valid username should be accepted: {username}");
+                Assert.That(result.SanitizedValue, Is.Not.Empty, 
+                    "Sanitized value should be provided");
+            }
+        }
+
+        [Test]
+        public void TestValidEmail_AcceptsLegitimateInput()
+        {
+            // Arrange
+            string[] validEmails = new[]
+            {
+                "user@example.com",
+                "john.doe@company.co.uk",
+                "test+tag@gmail.com",
+                "admin@subdomain.domain.com",
+                "user_123@test-domain.org"
+            };
+
+            // Act & Assert
+            foreach (var email in validEmails)
+            {
+                var result = _validationService.ValidateEmail(email);
+                Assert.That(result.IsValid, Is.True, 
+                    $"Valid email should be accepted: {email}");
+                Assert.That(result.SanitizedValue, Is.Not.Empty, 
+                    "Sanitized value should be provided");
+            }
+        }
+
+        #endregion
+
+        #region Edge Cases and Boundary Tests
+
+        [Test]
+        public void TestUsername_RejectsInvalidLength()
+        {
+            // Arrange
+            string tooShort = "ab";
+            string tooLong = new string('a', 51);
+
+            // Act
+            var shortResult = _validationService.ValidateUsername(tooShort);
+            var longResult = _validationService.ValidateUsername(tooLong);
+
+            // Assert
+            Assert.That(shortResult.IsValid, Is.False, "Username too short should be rejected");
+            Assert.That(longResult.IsValid, Is.False, "Username too long should be rejected");
+        }
+
+        [Test]
+        public void TestEmail_RejectsInvalidFormat()
+        {
+            // Arrange
+            string[] invalidEmails = new[]
+            {
+                "notanemail",
+                "@example.com",
+                "user@",
+                "user @example.com",
+                "user@.com",
+                "user@domain",
+                ""
+            };
+
+            // Act & Assert
+            foreach (var email in invalidEmails)
+            {
+                var result = _validationService.ValidateEmail(email);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Invalid email format should be rejected: {email}");
+            }
+        }
+
+        [Test]
+        public void TestUsername_RejectsSpecialCharacters()
+        {
+            // Arrange
+            string[] invalidUsernames = new[]
+            {
+                "user@test",
+                "user name",
+                "user-name",
+                "user.name",
+                "user!name",
+                "user#name"
+            };
+
+            // Act & Assert
+            foreach (var username in invalidUsernames)
+            {
+                var result = _validationService.ValidateUsername(username);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Username with special characters should be rejected: {username}");
+            }
+        }
+
+        [Test]
+        public void TestSanitization_RemovesNullBytes()
+        {
+            // Arrange
+            string inputWithNullByte = "test\0malicious";
+
+            // Act
+            var sanitized = _validationService.SanitizeInput(inputWithNullByte);
+
+            // Assert
+            Assert.That(sanitized.Contains("\0"), Is.False, "Null bytes should be removed");
+        }
+
+        [Test]
+        public void TestSanitization_TrimsWhitespace()
+        {
+            // Arrange
+            string inputWithWhitespace = "  test  ";
+
+            // Act
+            var sanitized = _validationService.SanitizeInput(inputWithWhitespace);
+
+            // Assert
+            Assert.That(sanitized.StartsWith(" "), Is.False, "Leading whitespace should be removed");
+            Assert.That(sanitized.EndsWith(" "), Is.False, "Trailing whitespace should be removed");
+        }
+
+        [Test]
+        public void TestValidation_HandlesEmptyInput()
+        {
+            // Arrange
+            string emptyInput = "";
+            string? nullInput = null;
+
+            // Act
+            var emptyResult = _validationService.ValidateUsername(emptyInput);
+            var nullResult = _validationService.ValidateUsername(nullInput!);
+
+            // Assert
+            Assert.That(emptyResult.IsValid, Is.False, "Empty input should be rejected");
+            Assert.That(nullResult.IsValid, Is.False, "Null input should be rejected");
+        }
+
+        #endregion
+
+        #region Additional Security Tests
+
+        [Test]
+        public void TestForPathTraversal_RejectsAttempts()
+        {
+            // Arrange
+            string[] pathTraversalAttempts = new[]
+            {
+                "../../../etc/passwd",
+                "..\\..\\windows\\system32",
+                "test/../admin",
+                "test/../../root"
+            };
+
+            // Act & Assert
+            foreach (var attempt in pathTraversalAttempts)
+            {
+                var result = _validationService.ValidateUsername(attempt);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Path traversal attempt should be rejected: {attempt}");
+            }
+        }
+
+        [Test]
+        public void TestForCommandInjection_RejectsSemicolons()
+        {
+            // Arrange
+            string[] commandInjectionAttempts = new[]
+            {
+                "test; rm -rf /",
+                "test; cat /etc/passwd",
+                "test & dir",
+                "test | ls -la"
+            };
+
+            // Act & Assert
+            foreach (var attempt in commandInjectionAttempts)
+            {
+                var result = _validationService.ValidateUsername(attempt);
+                Assert.That(result.IsValid, Is.False, 
+                    $"Command injection attempt should be rejected: {attempt}");
+            }
+        }
+
+        #endregion
+    }
+}
